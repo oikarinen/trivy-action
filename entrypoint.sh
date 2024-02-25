@@ -1,209 +1,170 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
 while getopts "a:b:c:d:e:f:g:h:i:j:k:l:m:n:o:p:q:r:s:t:u:v:x:z:" o; do
-   case "${o}" in
-       a)
-         export scanType=${OPTARG}
-       ;;
-       b)
-         export format=${OPTARG}
-       ;;
-       c)
-         export template=${OPTARG}
-       ;;
-       d)
-         export exitCode=${OPTARG}
-       ;;
-       e)
-         export ignoreUnfixed=${OPTARG}
-       ;;
-       f)
-         export vulnType=${OPTARG}
-       ;;
-       g)
-         export severity=${OPTARG}
-       ;;
-       h)
-         export output=${OPTARG}
-       ;;
-       i)
-         export imageRef=${OPTARG}
-       ;;
-       j)
-         export scanRef=${OPTARG}
-       ;;
-       k)
-         export skipDirs=${OPTARG}
-       ;;
-       l)
-         export input=${OPTARG}
-       ;;
-       m)
-         export cacheDir=${OPTARG}
-       ;;
-       n)
-         export timeout=${OPTARG}
-       ;;
-       o)
-         export ignorePolicy=${OPTARG}
-       ;;
-       p)
-         export hideProgress=${OPTARG}
-       ;;
-       q)
-         export skipFiles=${OPTARG}
-       ;;
-       r)
-         export listAllPkgs=${OPTARG}
-       ;;
-       s)
-         export scanners=${OPTARG}
-       ;;
-       t)
-         export trivyIgnores=${OPTARG}
-       ;;
-       u)
-         export githubPAT=${OPTARG}
-       ;;
-       v)
-         export trivyConfig=${OPTARG}
-       ;;
-       x)
-         export tfVars=${OPTARG}
-       ;;
-       z)
-         export limitSeveritiesForSARIF=${OPTARG}
-       ;;
-  esac
+  # Remove leading whitespace and trailing \r and whitespace
+  OPTARG=$(echo "${OPTARG}" | tr -d '\r' | xargs)
+  if [ -z "${OPTARG}" ]; then
+    continue
+  fi
+  case "${o}" in
+      a)
+        scanType="$OPTARG"
+      ;;
+      b)
+        format="$OPTARG"
+      ;;
+      c)
+        ARGS+=( "--template" "$OPTARG" )
+      ;;
+      d)
+        ARGS+=( "--exit-code" "$OPTARG" )
+        SARIF_ARGS+=( "--exit-code" "$OPTARG" )
+      ;;
+      e)
+        [ "$OPTARG" == "true" ] && ignoreUnfixed="--ignore-unfixed"
+      ;;
+      f)
+        vulnType+=( "--vuln-type" "$OPTARG" )
+      ;;
+      g)
+        ARGS+=( "--severity" "$OPTARG" )
+      ;;
+      h)
+        ARGS+=( "--output" "$OPTARG" )
+      ;;
+      i)
+        imageRef="$OPTARG"
+      ;;
+      j)
+        scanRef="$OPTARG"
+      ;;
+      k)
+        for i in ${OPTARG//,/ }
+        do
+            ARGS+=("--skip-dirs" "$i")
+            SARIF_ARGS+=("--skip-dirs" "$i")
+        done
+      ;;
+      l)
+        input="--input $OPTARG"
+      ;;
+      m)
+        GLOBAL_ARGS=("--cache-dir" "$OPTARG")
+      ;;
+      n)
+        ARGS+=( "--timeout" "$OPTARG" )
+        SARIF_ARGS+=( "--timeout" "$OPTARG" )
+      ;;
+      o)
+        ARGS+=( "--ignore-policy" "$OPTARG" )
+        SARIF_ARGS+=( "--ignore-policy" "$OPTARG" )
+      ;;
+      p)
+        if [ "$OPTARG" == "true" ]; then
+            ARGS+=( "--no-progress" )
+            SARIF_ARGS+=( "--no-progress" )
+        fi
+      ;;
+      q)
+        for i in ${OPTARG//,/ }
+        do
+            ARGS+=("--skip-files" "$i")
+            SARIF_ARGS+=("--skip-files" "$i")
+        done
+      ;;
+      r)
+        [ "$OPTARG" == "true" ] && ARGS+=( "--list-all-pkgs" )
+      ;;
+      s)
+        ARGS+=( "--scanners" "$OPTARG" )
+        SARIF_ARGS+=( "--scanners" "$OPTARG" )
+      ;;
+      t)
+        for f in ${OPTARG//,/ }
+        do
+            if [ -f "$f" ]; then
+                echo "::notice ::Found ignorefile '${f}':"
+                tee -a ./trivyignores < "$f"
+            else
+                echo "::error ::ERROR: cannot find ignorefile '${f}'."
+                exit 1
+            fi
+        done
+        ARGS+=( "--ignorefile" "./trivyignores" )
+      ;;
+      u)
+        githubPAT="$OPTARG"
+      ;;
+      v)
+        trivyConfig="$OPTARG"
+      ;;
+      x)
+        ARGS+=( "--tf-vars" "$OPTARG" )
+      ;;
+      z)
+        limitSeveritiesForSARIF="$OPTARG"
+      ;;
+      *)
+        echo "::error ::Invalid option: ${o}"
+        exit 2
+      ;;
+ esac
 done
 
+artifactRef="${imageRef-}"
+case "${scanType-}" in
+    repo|fs|filesystem|rootfs)
+        artifactRef="${scanRef-}"
+        ARGS+=("${ignoreUnfixed-}" "${vulnType[@]-}")
+        SARIF_ARGS+=("${ignoreUnfixed-}" "${vulnType[@]-}")
+    ;;
+    config)
+        artifactRef="${scanRef-}"
+    ;;
+    sbom)
+        artifactRef="${scanRef-}"
+        ARGS+=("${ignoreUnfixed-}")
+        SARIF_ARGS+=("${ignoreUnfixed-}")
+    ;;
+esac
 
-scanType=$(echo $scanType | tr -d '\r')
-export artifactRef="${imageRef}"
-if [ "${scanType}" = "repo" ] || [ "${scanType}" = "fs" ] || [ "${scanType}" = "filesystem" ] ||  [ "${scanType}" = "config" ] ||  [ "${scanType}" = "rootfs" ] || [ "${scanType}" = "sbom" ];then
-  artifactRef=$(echo $scanRef | tr -d '\r')
-fi
-input=$(echo $input | tr -d '\r')
-if [ $input ]; then
-  artifactRef="--input $input"
-fi
-#trim leading spaces for boolean params
-ignoreUnfixed=$(echo $ignoreUnfixed | tr -d '\r')
-hideProgress=$(echo $hideProgress | tr -d '\r')
-limitSeveritiesForSARIF=$(echo $limitSeveritiesForSARIF | tr -d '\r')
-
-GLOBAL_ARGS=""
-if [ $cacheDir ];then
-  GLOBAL_ARGS="$GLOBAL_ARGS --cache-dir $cacheDir"
-fi
-
-SARIF_ARGS=""
-ARGS=""
-format=$(echo $format | xargs)
-if [ $format ];then
- ARGS="$ARGS --format $format"
-fi
-if [ $template ] ;then
- ARGS="$ARGS --template $template"
-fi
-if [ $exitCode ];then
- ARGS="$ARGS --exit-code $exitCode"
- SARIF_ARGS="$SARIF_ARGS --exit-code $exitCode"
-fi
-if [ "$ignoreUnfixed" == "true" ] && [ "$scanType" != "config" ];then
-  ARGS="$ARGS --ignore-unfixed"
-  SARIF_ARGS="$SARIF_ARGS --ignore-unfixed"
-fi
-if [ $vulnType ] && [ "$scanType" != "config" ] && [ "$scanType" != "sbom" ];then
-  ARGS="$ARGS --vuln-type $vulnType"
-  SARIF_ARGS="$SARIF_ARGS --vuln-type $vulnType"
-fi
-if [ $scanners ];then
-  ARGS="$ARGS --scanners $scanners"
-  SARIF_ARGS="$SARIF_ARGS --scanners $scanners"
-fi
-if [ $severity ];then
-  ARGS="$ARGS --severity $severity"
-fi
-if [ $output ];then
-  ARGS="$ARGS --output $output"
-fi
-if [ $skipDirs ];then
-  for i in $(echo $skipDirs | tr "," "\n")
-  do
-    ARGS="$ARGS --skip-dirs $i"
-    SARIF_ARGS="$SARIF_ARGS --skip-dirs $i"
-  done
-fi
-if [ $tfVars ] && [ "$scanType" == "config" ];then
-  ARGS="$ARGS --tf-vars $tfVars"
-fi 
-
-if [ $trivyIgnores ];then
-  for f in $(echo $trivyIgnores | tr "," "\n")
-  do
-    if [ -f "$f" ]; then
-      echo "Found ignorefile '${f}':"
-      cat "${f}"
-      cat "${f}" >> ./trivyignores
-    else
-      echo "ERROR: cannot find ignorefile '${f}'."
-      exit 1
-    fi
-  done
-  ARGS="$ARGS --ignorefile ./trivyignores"
-fi
-if [ $timeout ];then
-  ARGS="$ARGS --timeout $timeout"
-  SARIF_ARGS="$SARIF_ARGS --timeout $timeout"
-fi
-if [ $ignorePolicy ];then
-  ARGS="$ARGS --ignore-policy $ignorePolicy"
-  SARIF_ARGS="$SARIF_ARGS --ignore-policy $ignorePolicy"
-fi
-if [ "$hideProgress" == "true" ];then
-  ARGS="$ARGS --no-progress"
-  SARIF_ARGS="$SARIF_ARGS --no-progress"
+if [ "${input-}" ]; then
+  artifactRef="$input"
 fi
 
-listAllPkgs=$(echo $listAllPkgs | tr -d '\r')
-if [ "$listAllPkgs" == "true" ];then
-  ARGS="$ARGS --list-all-pkgs"
-fi
-if [ "$skipFiles" ];then
-  for i in $(echo $skipFiles | tr "," "\n")
-  do
-    ARGS="$ARGS --skip-files $i"
-    SARIF_ARGS="$SARIF_ARGS --skip-files $i"
-  done
-fi
-
-trivyConfig=$(echo $trivyConfig | tr -d '\r')
-# To make sure that uploda GitHub Dependency Snapshot succeeds, disable the script that fails first.
+# To make sure that upload GitHub Dependency Snapshot succeeds, disable the script that fails first.
 set +e
-if [ "${format}" == "sarif" ] && [ "${limitSeveritiesForSARIF}" != "true" ]; then
+if [ "${format-}" == "sarif" ] && [ "${limitSeveritiesForSARIF-}" != "true" ]; then
   # SARIF is special. We output all vulnerabilities,
   # regardless of severity level specified in this report.
   # This is a feature, not a bug :)
-  echo "Building SARIF report with options: ${SARIF_ARGS}" "${artifactRef}"
-  trivy --quiet ${scanType} --format sarif --output ${output} $SARIF_ARGS ${artifactRef}
-elif [ $trivyConfig ]; then
-   echo "Running Trivy with trivy.yaml config from: " $trivyConfig
-   trivy --config $trivyConfig ${scanType} ${artifactRef}
+  echo "::notice ::Building SARIF report"
+  echo -n "::debug ::trivy --quiet ${scanType-} --format ${format-} ${SARIF_ARGS[*]-} "
+  echo "${ignoreUnfixed-} ${vulnType[*]-} ${artifactRef-}"
+  trivy --quiet "${scanType-}" --format "${format-}" "${SARIF_ARGS[@]-}" "${artifactRef-}"
+elif [ "${trivyConfig-}" ]; then
+  echo "Running Trivy with trivy.yaml config from: $trivyConfig"
+  echo "::debug ::trivy --config ${trivyConfig-} ${scanType-} ${artifactRef-}"
+  trivy --config "${trivyConfig-}" "${scanType-}" "${artifactRef-}"
 else
-   echo "Running trivy with options: trivy ${scanType} ${ARGS}" "${artifactRef}"
-   echo "Global options: " "${GLOBAL_ARGS}"
-   trivy $GLOBAL_ARGS ${scanType} ${ARGS} ${artifactRef}
+  echo "Running trivy"
+  echo "::notice ::Running trivy"
+  echo -n "::debug :: trivy ${GLOBAL_ARGS[*]-} ${scanType-} --format ${format-} ${ARGS[*]-} "
+  echo "${artifactRef-}"
+  trivy "${GLOBAL_ARGS[@]-}" "${scanType-}" --format "${format-}" "${ARGS[@]-}" "${artifactRef-}"
 fi
 returnCode=$?
 
 set -e
-if [[ "${format}" == "github" ]]; then
-  if [[ "$(echo $githubPAT | xargs)" != "" ]]; then
-    printf "\n Uploading GitHub Dependency Snapshot"
-    curl -H 'Accept: application/vnd.github+json' -H "Authorization: token $githubPAT" 'https://api.github.com/repos/'$GITHUB_REPOSITORY'/dependency-graph/snapshots' -d @./$(echo $output | xargs)
+if [ "${format-}" == "github" ]; then
+  if [ "${githubPAT-}" != "" ]; then
+    printf "\n ::notice ::Uploading GitHub Dependency Snapshot"
+    curl -H 'Accept: application/vnd.github+json' -H "Authorization: token $githubPAT" \
+        "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/dependency-graph/snapshots" -d "@./${output-}"
   else
-    printf "\n Failing GitHub Dependency Snapshot. Missing github-pat"
+    printf "\n ::error ::Failing GitHub Dependency Snapshot. Missing github-pat"
+    exit 1
   fi
 fi
 
