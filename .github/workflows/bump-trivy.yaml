@@ -11,6 +11,9 @@ on:
 run-name: Bump trivy to v${{ inputs.trivy_version }}
 
 jobs:
+  permissions:
+    contents: write
+    pull-requests: write
   bump:
     runs-on: ubuntu-latest
     steps:
@@ -25,7 +28,7 @@ jobs:
         id: create-pr
         uses: peter-evans/create-pull-request@v5
         with:
-          token: ${{ secrets.ORG_REPO_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           title: "chore(deps): Update trivy to v${{ inputs.trivy_version }}"
           commit-message: "chore(deps): Update trivy to v${{ inputs.trivy_version }}"
           committer: github-actions[bot] <github-actions[bot]@users.noreply.github.com>
